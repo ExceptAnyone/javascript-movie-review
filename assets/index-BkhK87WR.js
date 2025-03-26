@@ -42,6 +42,18 @@ const debounce = (callback) => {
     id = requestAnimationFrame(callback);
   };
 };
+const timeOutDebounce = (fn, delay) => {
+  let timeout;
+  return (...args) => {
+    return new Promise((resolve) => {
+      if (timeout) clearTimeout(timeout);
+      timeout = setTimeout(async () => {
+        const result = await fn(...args);
+        resolve(result);
+      }, delay);
+    });
+  };
+};
 const $ = (selector, scope = document) => {
   if (!selector) throw new Error("Selector is not selected");
   return scope.querySelector(selector);
@@ -119,7 +131,7 @@ function Core() {
   }
   return { useState: useState2, useEvents: useEvents2, render: render2, reRender: reRender2 };
 }
-const { useEvents, render, reRender } = Core();
+const { useState, useEvents, render, reRender } = Core();
 let currentPage = 1;
 let movies = [];
 let searchInputValue = "";
@@ -158,10 +170,6 @@ const appendSearchResults = (newResults) => {
 const resetPage = () => {
   currentPage = 1;
 };
-const setIsLoading = (value) => {
-  isLoading = value;
-  reRender();
-};
 const setIsError = (value) => {
   isError = value;
   reRender();
@@ -182,11 +190,11 @@ const options = {
   }
 };
 const url = {
-  popular: (page) => `https://api.themoviedb.org/3/discover/movie?include_adult=false&include_video=false&language=ko-KR&page=1&sort_by=popularity.desc=${page}`,
-  search: (query) => `https://api.themoviedb.org/3/search/movie?include_adult=false&language=ko-KR&page=1&query=${encodeURIComponent(
+  popular: (page) => `${"https://api.themoviedb.org/3"}/discover/movie?include_adult=false&include_video=false&language=ko-KR&page=1&sort_by=popularity.desc=${page}`,
+  search: (query) => `${"https://api.themoviedb.org/3"}/search/movie?include_adult=false&language=ko-KR&page=1&query=${encodeURIComponent(
     query
   )}`,
-  more: (page) => `https://api.themoviedb.org/3/search/movie?include_adult=false&language=ko-KR&page=${page}&query=${encodeURIComponent(
+  more: (page) => `${"https://api.themoviedb.org/3"}/search/movie?include_adult=false&language=ko-KR&page=${page}&query=${encodeURIComponent(
     searchInputValue
   )}`
 };
@@ -198,47 +206,46 @@ const useGetMoreMovieList = () => {
         const response = await fetch(url.more(nextPage), options);
         const data = await response.json();
         appendSearchResults(data.results);
+        return data.results;
       } catch (error) {
         console.error("Error fetching search results:", error);
         setIsMoreError(true);
       }
+      return { isLoading: false, data: null };
     } else {
       const newMovies = await callback(nextPage);
       if (newMovies) {
-        appendMovies(newMovies);
+        appendMovies(newMovies.data ?? []);
       }
+      return newMovies;
     }
   };
-  return { fetchMoreMovies };
+  return { fetchMoreMovies, isMoreError };
 };
 const useGetMovieList = () => {
   const fetchMovies = async (page) => {
+    const [isLoading2, setIsLoading] = useState(false);
     try {
-      const response = await fetch(url.popular(page), {
-        headers: {
-          Authorization: `Bearer ${"eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJmYTI4NGQyMzkyYWI1Y2Q3NTRhMDJiYWEzYzM3NmZlNiIsIm5iZiI6MTY5MDk4NDkyMS43NTIsInN1YiI6IjY0Y2E2MWQ5MGNiMzM1MTdjMDZhOWQ1MyIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.piQJfh75UeyzIY-z6BLJz3SU6m9AlKsM_tU7wtRt04c"}`
-        },
-        method: "GET"
-      });
+      const response = await fetch(url.popular(page), options);
       const data = await response.json();
       if (data) {
         setIsLoading(false);
       }
       setMovies([...movies, ...data.results]);
       setTotalResults(data.total_results);
-      return data.results;
+      return { isLoading: isLoading2, data: data.results };
     } catch (error) {
       setIsError(true);
       console.error("Error fetching data in App:", error);
     }
-    return null;
+    return { isLoading: isLoading2, data: null };
   };
-  return { fetchMovies };
+  return { fetchMovies, isLoading };
 };
 const Button = (props) => {
   const { attribute, children } = props;
   return `
-    <button ${attribute ? parseAttribute(attribute) : ""}" >${children}</button>`;
+    <button ${parseAttribute(attribute)}" >${children}</button>`;
 };
 const images = {
   logo: "./logo.png",
@@ -250,7 +257,7 @@ const Footer = () => {
   return `
     <footer class="footer">
         <p>&copy; 우아한테크코스 All Rights Reserved.</p>
-        <p><img src="${images.woowacourse}" width="180" /></p>
+        <p><img src="${images.woowacourse}" width="180" alt="우아한테크코스"/></p>
     </footer>
   `;
 };
@@ -280,26 +287,38 @@ const useInputChange = (selector, setSearchInputValue2) => {
     if (!inputValue.trim()) return;
     setSearchInputValue2(inputValue);
   };
-  return { handleInputChange };
+  const resetInput = () => {
+    const inputValue = $(selector);
+    if (inputValue) {
+      inputValue.value = "";
+    }
+  };
+  return { handleInputChange, resetInput };
 };
 const Input = (props) => {
   const { attribute } = props;
   return `
-  <input ${attribute ? parseAttribute(attribute) : ""} />
+  <input ${parseAttribute(attribute)} />
  `;
 };
 const Header = (props) => {
   const { rate, title, src } = props;
   const { fetchSearchMovieList } = useGetSearchMovieList();
-  const { handleInputChange } = useInputChange(
+  const { handleInputChange, resetInput } = useInputChange(
     ".search-input",
     setSearchInputValue
   );
   const [addEvent] = useEvents(".background-container");
-  addEvent("click", ".search-button-icon", (e) => {
+  addEvent("click", ".search-button-icon", async (e) => {
     e.preventDefault();
     handleInputChange();
-    fetchSearchMovieList(searchInputValue);
+    if (searchInputValue) {
+      await fetchSearchMovieList(searchInputValue);
+      resetInput();
+    }
+  });
+  addEvent("click", ".logo", () => {
+    window.location.href = "/";
   });
   return `
     <header class="header">
@@ -385,22 +404,33 @@ const Skeleton = () => {
   </li>
   `;
 };
+const SkeletonList = () => {
+  return `
+    <ul class="thumbnail-list">
+      ${Array(20).fill(null).map(() => Skeleton()).join("")}
+    </ul>
+  `;
+};
 const App = () => {
   var _a, _b, _c;
   const { fetchMovies } = useGetMovieList();
-  const { fetchMoreMovies } = useGetMoreMovieList();
+  const { fetchMoreMovies, isMoreError: isMoreError2 } = useGetMoreMovieList();
   const [addEvent] = useEvents(".app-layout");
-  addEvent("click", ".more-button", () => {
-    fetchMoreMovies(fetchMovies);
-  });
+  addEvent(
+    "click",
+    ".more-button",
+    timeOutDebounce(() => {
+      fetchMoreMovies(fetchMovies);
+    }, 500)
+  );
   if (movies.length === 0) {
     fetchMovies(1).then((results) => {
       if (results) {
-        setMovies(results);
+        setMovies(results.data ?? []);
       }
     });
   }
-  const displayMovieList = searchInputValue.trim().length > 0 ? searchResults : movies;
+  const displayMovieList = searchResults.length > 0 ? searchResults : movies;
   return ` ${isError || !movies.length ? `<div class="movie-list-error">에러가 발생했습니다. 다시 시도해주세요.</div>` : Header({
     rate: ((_a = movies[0]) == null ? void 0 : _a.vote_count) ?? 0,
     title: ((_b = movies[0]) == null ? void 0 : _b.title) ?? "",
@@ -408,19 +438,19 @@ const App = () => {
   })}
   
     <div class="app-layout">
-      <h1 class="sub-title">${searchInputValue.length > 0 ? `${searchInputValue} 검색 결과` : "지금 인기 있는 영화"}</h1>
+      <h1 class="sub-title">${searchResults.length > 0 ? `검색 결과` : "지금 인기 있는 영화"}</h1>
 
       ${isSearchError ? `<div class="no-results">검색 결과를 불러오는데 실패하였습니다.</div>` : ""}
-      ${searchInputValue.length > 0 && displayMovieList.length === 0 ? `<div class="no-results">검색 결과가 없습니다.</div>` : `<ul class="thumbnail-list">
-              ${displayMovieList.map((movie) => {
-    return isLoading ? Skeleton() : MovieItem({
+      ${searchResults.length === 0 && searchInputValue.trim().length > 0 ? `<div class="no-results">검색 결과가 없습니다.</div>` : `${movies.length === 0 ? `${SkeletonList()}` : `<ul class="thumbnail-list">
+                    ${displayMovieList.map(
+    (movie) => MovieItem({
       title: movie.title,
       rate: movie.vote_count,
       src: `https://image.tmdb.org/t/p/w500${movie.poster_path}`
-    });
-  }).join("")}
-            </ul>
-      ${isMoreError ? `<div>영화 목록을 불러오는 데 실패했습니다.</div>` : ""}
+    })
+  ).join("")}
+                  </ul>`}
+      ${isMoreError2 ? `<div>영화 목록을 불러오는 데 실패했습니다.</div>` : ""}
     ${displayMovieList.length < totalResults ? Button({
     attribute: {
       class: "primary detail more-button"
